@@ -18,3 +18,5 @@ gps = mpf.get_gps()
 for with_images in mpf.get_seven_day_weather_forecast(gps,get_images=True):
 	display(Image(data=requests.get(forecast_url_+with_images['image']).content))
 ```
+# COMMAND LINE
+python -m mp_forecast -u seki -s
