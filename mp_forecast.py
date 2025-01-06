@@ -12,18 +12,20 @@ import errno
 import time
 import pickle
 import os
+import json
 # import glob
 import argparse
+
+forecast_url_ = 'https://forecast.weather.gov/'
+forecast_url_base = 'https://forecast.weather.gov/MapClick.php?lon={longitude}&lat={latitude}#.YVIu8bhKg-U'
 
 california_url = 'https://www.mountainproject.com/area/105708959/california'
 high_sierra_url = 'https://www.mountainproject.com/area/105791817/high-sierra'
 seki_url = 'https://www.mountainproject.com/area/108147148/sequoia-kings-canyon-np'
-forecast_url_ = 'https://forecast.weather.gov/'
-forecast_url_base = 'https://forecast.weather.gov/MapClick.php?lon={longitude}&lat={latitude}#.YVIu8bhKg-U'
 shasta_url = 'https://www.mountainproject.com/area/106464248/mt-shasta'
 tahoe_url = 'https://www.mountainproject.com/area/105798291/lake-tahoe'
 san_gorgonio_url = 'https://www.mountainproject.com/area/107446455/san-gorgonio-mountain'
-castle_peak_url = 'https://www.mountainproject.com/area/121309470/castle-peak'
+castle_crags_url = 'https://www.mountainproject.com/area/106053028/castle-crags'
 oregon_volcanoes_url = 'https://www.mountainproject.com/area/109532053/oregon-volcanoes'
 wind_river_url = 'https://www.mountainproject.com/area/105823538/wind-river-range'
 ritter_minarets_url = 'https://www.mountainproject.com/area/110847705/04-ritter-minarets'
@@ -32,12 +34,12 @@ yosemite_url = 'https://www.mountainproject.com/area/105833388/yosemite-valley'
 indian_creek_url = 'https://www.mountainproject.com/area/105716763/indian-creek'
 cochise_url = 'https://www.mountainproject.com/area/105738034/cochise-stronghold'
 
-saved_urls = dict(california_url=california_url, high_sierra_url=high_sierra_url, seki_url=seki_url,
-				  shasta_url=shasta_url, tahoe_url=tahoe_url, san_gorgonio_url=san_gorgonio_url,
-				  castle_peak_url=castle_peak_url, oregon_volcanoes_url=oregon_volcanoes_url,
-				  wind_river_url=wind_river_url,ritter_minarets_url=ritter_minarets_url,
-				  joshua_tree_url=joshua_tree_url,yosemite_url=yosemite_url,
-				  indian_creek_url=indian_creek_url,cochise_url=cochise_url)
+saved_urls = dict(california=california_url, high_sierra=high_sierra_url, seki=seki_url,
+				  shasta=shasta_url, tahoe=tahoe_url, san_gorgonio=san_gorgonio_url,
+				  castle_crags=castle_crags_url, oregon_volcanoes=oregon_volcanoes_url,
+				  wind_river=wind_river_url,ritter_minarets=ritter_minarets_url,
+				  joshua_tree=joshua_tree_url,yosemite=yosemite_url,
+				  indian_creek=indian_creek_url,cochise=cochise_url)
 cwd = os.getcwd()
 if not 'mp-forecast' in cwd:
 	directory = os.path.join(cwd,'mp-forecast')
@@ -68,6 +70,7 @@ class MtProjForecast():
 				raise ValueError('url not found {}'.format(base_url))
 		self.base_url = base_url
 		self.new_mp_soup(url=base_url)
+		self.id = self.get_url_id(base_url)
 		self.f_soup = None
 		self.detailed_forecast = detailed_forecast
 
@@ -88,11 +91,33 @@ class MtProjForecast():
 		soup = bs(page.content, 'html.parser')
 		self.f_soup = soup
 
+	def get_area_title(self,soup=None):
+		if soup is None:
+			soup = self.mp_soup
+		title = self.mp_soup.find('title').string
+		parent_area = title.split(', ')[-1] if ',' in title else title
+		return dict(title=title,parent_area=parent_area)
+	
+	def get_url_id(self,url=None):
+		if not url:
+			if not self.base_url:
+				url = self.get_soup_url()
+			else:
+				url = self.base_url
+		return re.search(r'\d+',url).group()
+	def get_soup_url(self):
+		meta = self.mp_soup.find_all('meta')
+		for m in meta:
+			content = m.get('content')
+			if not content:continue
+			if 'https://www.mountainproject.com/area/' in content:
+				return content
+		return None
 	def get_area_name(self, soup=None):
 		if soup is None:
 			soup = self.mp_soup
 		an = soup.find('h3').string
-		print(an)
+		# print(an)
 		cleaned = clean_text(an)
 		return cleaned if cleaned else clean_text(re.search(r'(?<=in )([^\t\n\r\f\v\d]*)', an).group())
 
@@ -158,7 +183,9 @@ class MtProjForecast():
 			fd.update(self.get_weather_forecast_details(gps))
 		else:
 			fd.update(self.get_seven_day_weather_forecast_dict(gps))
+		
 		fd.update(self.get_about_forecast())
+		
 		stats.update({'Forecast': fd})
 		return stats
 
@@ -171,14 +198,9 @@ class MtProjForecast():
 		for k, v in areas.items():
 			self.new_mp_soup(url=v)
 			stats = self.get_area_stats()
-			# stats = {}
-			# stats.update(self.get_elevation())
-			# gps = self.get_gps()
-			# stats.update(gps)
-			# fd = {}
-			# fd.update(self.get_weather_forecast_details(gps))
-			# fd.update(self.get_about_forecast())
-			# stats.update({'Forecast': fd})
+			stats.update(self.get_area_title())
+			stats['url'] = self.base_url
+			stats['id'] = self.id
 			sub_areas = self.get_areas(url=v)
 			if sub_areas:
 				if not visit_sub_areas:
@@ -193,7 +215,7 @@ class MtProjForecast():
 
 	def get_area_forecasts(self, area_stats):
 		self.area_forecasts = [AreaForecast(location=k, gps=v['GPS'], elevation=v['Elevation'],
-											forecast=v['Forecast'], sub_areas=v.get('Sub Areas', {}),detailed_forecast=self.detailed_forecast) for k, v in area_stats.items()]
+											forecast=v['Forecast'], sub_areas=v.get('Sub Areas', {}),detailed_forecast=self.detailed_forecast,data=v) for k, v in area_stats.items()]
 
 	def get_elevation(self, soup=None):
 		if soup is None:
@@ -202,7 +224,7 @@ class MtProjForecast():
 		# elev = details.find('td', class_="text-nowrap")
 		# return {re.sub(r'\W', '', elev.next.string): re.sub(r'\W', '', elev.next.next.next.string)}
 		elevation = None
-		comp = re.compile('(\d*[\,]?\d* ft{1})')
+		comp = re.compile(r'(\d*[\,]?\d* ft{1})')
 		for t in details.find_all('td'):
 			ts = t.string
 			if ts:
@@ -230,7 +252,7 @@ class MtProjForecast():
 			if 'GPS' in t.string:
 				gps = t
 				break
-		return {re.sub(r'\W', '', gps.string): re.sub('[ \t\n\r\f\v]', '', gps.next_sibling.next_sibling.contents[0])}
+		return {re.sub(r'\W', '', gps.string): re.sub(r'[ \t\n\r\f\v]', '', gps.next_sibling.next_sibling.contents[0])}
 
 	def get_weather_forecast_details(self, gps):
 		latitude, longitude = gps['GPS'].split(',')
@@ -249,7 +271,7 @@ class MtProjForecast():
 		return dict(chunks(details, 2))
 
 	def get_seven_day_weather_forecast_dict(self, gps, get_images=False):
-		return dict([f.split(': ') for f in self.get_seven_day_weather_forecast(self, gps=gps, get_images=False)])
+		return dict([f.split(': ') for f in self.get_seven_day_weather_forecast(gps=gps, get_images=get_images)])
 
 	def get_seven_day_weather_forecast(self, gps, get_images=False):
 		'''
@@ -266,7 +288,7 @@ class MtProjForecast():
 		# self.f_soup = bs(forecast.content, 'html.parser')
 		# self.f_soup = fsoup
 		f_body = self.f_soup.find(id='seven-day-forecast-container')
-		details = []
+		# details = []
 		if not get_images:
 			for ft in f_body.find_all('li', class_='forecast-tombstone'):
 				yield ft.find_all('p')[1].next_element['alt']
@@ -332,13 +354,23 @@ class MtProjForecast():
 
 
 class AreaForecast():
-	def __init__(self, location, gps, elevation, forecast, sub_areas={},detailed_forecast=True):
+	def __init__(self, location, gps, elevation, forecast, sub_areas={},detailed_forecast=True,data={}):
 		self.location = location
+		if data:
+			self.iter_set_attrs(data)
+		# self.title = None
+		# self.parent_area = None
+		# if title:
+		# 	self.title = title
+		# if parent_area:
+		# 	self.parent_area = parent_area
 		self.gps = gps
 		self.elevation = elevation
 		self.forecast = forecast
 		self.detailed_forecast = detailed_forecast
 		self.sub_areas = None
+		
+
 		if sub_areas:
 			# print(sub_areas)
 			
@@ -348,7 +380,14 @@ class AreaForecast():
 			except (TypeError,ValueError) as e:
 				print(sub_areas)
 				raise e
+	def iter_set_attrs(self, attrs):
+		if isinstance(attrs, dict):
+			for k, v in attrs.items():
+				if k.islower():
+					self._set_attrs(k, v)
 
+	def _set_attrs(self, key, val):
+		setattr(self, key, val)
 	def area_series(self, pop_forecast=True, transpose=True):
 		area = self.__dict__.copy()
 		area.pop('forecast')
@@ -383,7 +422,8 @@ class AreaForecast():
 		df = self.forecast_dataframe()
 		if not self.sub_areas:
 			if save:
-				self.save_csv(df)
+				# self.save_csv(df)
+				self.save_json()
 			return df
 		dfs.append(df)
 		for area in self.get_sub_areas():
@@ -391,17 +431,41 @@ class AreaForecast():
 			dfs.append(df)
 		df = pd.concat(dfs, sort=False)
 		if save:
-			self.save_csv(df)
+			# self.save_csv(df)
+			self.save_json()
 		return df
 
 	def save_csv(self, srdf):
-		dst = os.path.join(directory,'Forecasts','{} {} Forecast {}.csv'.format(self.location,'Simplified' if self.detailed_forecast else 'Detailed',datetime.today().date()))
+		dst = os.path.join(directory,'Forecasts','{} {} Forecast {}.csv'.format(self.location,'Detailed' if self.detailed_forecast else 'Simplified',datetime.today().date()))
 		if isinstance(srdf, pd.Series):
 			srdf = srdf.to_frame().to_csv(dst)
 		elif isinstance(srdf, (pd.DataFrame, pd.MultiIndex)):
 			srdf.to_csv(dst)
 		else:
 			raise TypeError('srdf is not of the correct type')
+		print(f'Saved {dst}' if os.path.exists(dst) else f'Could not save srdf to {dst}')
+	def save_json(self):
+		dst = os.path.join(directory,'Forecasts','{} {} Forecast {}.json'.format(self.location,'Detailed' if self.detailed_forecast else 'Simplified',datetime.today().date()))
+		data = self.__dict__.copy()
+		data.pop('sub_areas')
+		data.pop('detailed_forecast')
+		# cleaned_data = {k.replace(' ','_') : v for k,v in data.items()}
+		cleaned_data = {}
+		def update_key(key):
+			return key.replace(' ','_')
+		for k,v in data.items():
+			x = update_key(k)
+			if isinstance(v,dict):
+				vals = {}
+				for y,z in v.items():
+					vals[update_key(y)] = z
+				cleaned_data[x] = vals
+			else:
+				cleaned_data[x] = v
+
+		with open(dst,'w') as f:
+			json.dump(cleaned_data,f)
+		print(f'Saved {dst}' if os.path.exists(dst) else f'Could not save data to {dst}')
 
 	def main(self, **kwargs):
 		# print(kwargs)
@@ -447,9 +511,9 @@ def load_urls(urls_filename, url_dir=directory):
 
 
 def join_pickle_file(urls_filename, url_dir=directory):
-	print(urls_filename)
+	# print(urls_filename)
 	full_path = os.path.join(os.path.normpath(url_dir), urls_filename) + '.pickle'
-	print(full_path)
+	# print(full_path)
 	return full_path
 
 
@@ -464,10 +528,10 @@ def dump_urls(mountain_urls, urls_filename, url_dir=directory):
 
 def clean_text(text):
 	# print(text)
-	clean_text  =re.sub('Areas in|Routes in','',text).strip()
+	clean_text  =re.sub('Areas in|Routes in|Rock Climbing in','',text).strip()
 	if clean_text:
 		# print(clean_text)
-		text = re.sub('[\\\/]',' ',clean_text)
+		text = re.sub(r'[\\\/]',' ',clean_text)
 	matchs = re.findall(r'([^\t\n\r\f\v\d\-\,]*)', text)
 	if not matchs:
 		return text
@@ -518,12 +582,14 @@ def args():
 
 def main(**kwargs):
 	
-	url = kwargs['url']
+	url = kwargs.pop('url')
 	if url[:5] != 'https':
+		# if url[4:] != '_url':
+		# 	url += '_url'
 		url = saved_urls.get(url, None)
 		if url is None:
 			raise ValueError('url not found {}'.format(kwargs['url']))
-	mpf = MtProjForecast(url)
+	mpf = MtProjForecast(url,detailed_forecast=kwargs.pop('detailed_forecast'))
 	mpf.main(**kwargs)
 	
 	return mpf
